@@ -23,12 +23,7 @@ const IngestExtractionSchema = z.object({
         z.object({
           page_number: z.number().int().min(1).describe('1-indexed page number where diagram is located'),
           caption: z.string().describe('Concise Vietnamese caption describing the diagram/figure'),
-          box_2d: z.tuple([
-            z.number().min(0).max(1000), // ymin
-            z.number().min(0).max(1000), // xmin
-            z.number().min(0).max(1000), // ymax
-            z.number().min(0).max(1000), // xmax
-          ]).describe('[ymin, xmin, ymax, xmax] coordinates normalized to 0-1000 scale'),
+          box_2d: z.array(z.number()).describe('[ymin, xmin, ymax, xmax] coordinates normalized to 0-1000 scale'),
         })
       ).default([]).describe('List of visual diagrams, charts, figures detected on pages'),
     })
@@ -130,12 +125,7 @@ NGUYÊN TẮC BẮT BUỘC (QUY TẮC ANTI-TRUNCATION - KHÔNG PHÁ HỦY KIẾN
           z.object({
             page_number: z.number().int().min(1).describe('1-indexed page number where diagram is located'),
             caption: z.string().describe('Concise Vietnamese caption describing the diagram/figure/chart'),
-            box_2d: z.tuple([
-              z.number().min(0).max(1000),
-              z.number().min(0).max(1000),
-              z.number().min(0).max(1000),
-              z.number().min(0).max(1000),
-            ]).describe('[ymin, xmin, ymax, xmax] 0-1000 coordinates'),
+            box_2d: z.array(z.number()).describe('[ymin, xmin, ymax, xmax] 0-1000 coordinates'),
           })
         ).default([]),
       });

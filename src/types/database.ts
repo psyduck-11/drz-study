@@ -24,7 +24,7 @@ export interface WikiSection {
 export interface CroppedIllustration {
   page_number: number;
   caption: string;
-  box_2d: [number, number, number, number]; // [ymin, xmin, ymax, xmax] 0-1000
+  box_2d: [number, number, number, number] | number[]; // [ymin, xmin, ymax, xmax] 0-1000
   image_url?: string;
 }
 

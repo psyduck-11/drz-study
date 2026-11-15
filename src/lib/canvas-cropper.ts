@@ -6,7 +6,7 @@
  */
 export async function cropCanvasBox2d(
   canvas: HTMLCanvasElement,
-  box2d: [number, number, number, number],
+  box2d: [number, number, number, number] | number[],
   padding: number = 10
 ): Promise<Blob> {
   const [ymin, xmin, ymax, xmax] = box2d;

@@ -108,7 +108,7 @@ export default function HomePage() {
     });
   };
 
-  // Fetch subjects from Supabase or fallback
+  // Fetch subjects from Supabase or fallback — runs ONCE on mount
   const fetchSubjects = useCallback(async () => {
     try {
       if (isSupabaseConfigured) {
@@ -121,9 +121,7 @@ export default function HomePage() {
 
         if (data && data.length > 0) {
           setSubjects(data);
-          if (!activeSubject) {
-            setActiveSubject(data[0]);
-          }
+          setActiveSubject(data[0]);
         } else {
           // If Supabase table is empty, create a starter subject
           const { data: newSub } = await supabase
@@ -144,12 +142,14 @@ export default function HomePage() {
           const parsed = JSON.parse(stored);
           if (parsed.length > 0) {
             setSubjects(parsed);
-            if (!activeSubject) setActiveSubject(parsed[0]);
+            setActiveSubject(parsed[0]);
             return;
           }
         }
+        // First time: seed demo data and persist it
         setSubjects([INITIAL_DEMO_SUBJECT]);
         setActiveSubject(INITIAL_DEMO_SUBJECT);
+        localStorage.setItem('living_wiki_subjects', JSON.stringify([INITIAL_DEMO_SUBJECT]));
       }
     } catch (err) {
       console.warn('Lỗi khi tải môn học từ Supabase:', err);
@@ -158,7 +158,8 @@ export default function HomePage() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeSubject]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fetch sections for current active subject
   const fetchSections = useCallback(async (subjectId: string) => {
