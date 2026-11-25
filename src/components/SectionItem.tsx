@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { WikiSection } from '@/types/database';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { Edit2, Check, X, Trash2, ArrowUp, ArrowDown, Eye, Code } from 'lucide-react';
@@ -27,6 +27,14 @@ export const SectionItem: React.FC<SectionItemProps> = ({
   const [content, setContent] = useState(section.content_markdown);
   const [previewTab, setPreviewTab] = useState<'editor' | 'preview'>('editor');
   const [isSaving, setIsSaving] = useState(false);
+
+  // Sync editor buffer when external updates (e.g. AI APPEND) occur while not editing
+  useEffect(() => {
+    if (!isEditing) {
+      setTitle(section.title);
+      setContent(section.content_markdown);
+    }
+  }, [section.title, section.content_markdown, isEditing]);
 
   const handleSave = async () => {
     if (!title.trim()) return;

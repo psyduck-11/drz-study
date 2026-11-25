@@ -5,7 +5,7 @@ import { Subject, WikiSection, Source } from '@/types/database';
 import { renderPdfFile, renderImageFile, RenderedPage } from '@/lib/pdf-renderer';
 import { cropCanvasBox2d } from '@/lib/canvas-cropper';
 import { uploadSourceFile, uploadCroppedIllustration } from '@/lib/storage';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
 import {
   Upload,
   FileText,
@@ -26,6 +26,8 @@ interface DocumentIngestionModalProps {
   isOpen: boolean;
   activeSubject: Subject | null;
   existingSections: WikiSection[];
+  useSupabase: boolean;
+  onSupabaseOffline?: (reason: string) => void;
   onClose: () => void;
   onSuccess: () => Promise<void>;
 }
@@ -49,6 +51,8 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
   isOpen,
   activeSubject,
   existingSections,
+  useSupabase,
+  onSupabaseOffline,
   onClose,
   onSuccess,
 }) => {
@@ -62,6 +66,14 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
   if (!isOpen) return null;
 
   const isProcessing = stage !== 'idle' && stage !== 'done' && stage !== 'error';
+
+  const handleClose = () => {
+    if (isProcessing) return;
+    setStage('idle');
+    setErrorMessage(null);
+    setStatusMessage('');
+    onClose();
+  };
 
   const addFiles = (newFiles: FileList | File[]) => {
     const validFiles: File[] = [];
@@ -132,6 +144,36 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
     try {
       setErrorMessage(null);
       let dynamicSections = [...existingSections];
+      let activeSupabase = useSupabase;
+
+      const saveLocalSource = (fileName: string, fileUrl: string, fileIndex: number) => {
+        const newSource: Source = {
+          id: `src-${Date.now()}-${fileIndex}`,
+          subject_id: activeSubject.id,
+          file_name: fileName,
+          file_url: fileUrl,
+          created_at: new Date().toISOString(),
+        };
+        const stored = localStorage.getItem(`living_wiki_sources_${activeSubject.id}`);
+        let list: Source[] = [];
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed)) list = parsed;
+          } catch {
+            list = [];
+          }
+        }
+        list.unshift(newSource);
+        localStorage.setItem(`living_wiki_sources_${activeSubject.id}`, JSON.stringify(list));
+      };
+
+      const switchToLocalFallback = (reason: string) => {
+        if (activeSupabase) {
+          activeSupabase = false;
+          onSupabaseOffline?.(reason);
+        }
+      };
 
       for (let fIdx = 0; fIdx < files.length; fIdx++) {
         const file = files[fIdx];
@@ -140,28 +182,27 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
 
         // Stage 1: Upload original source file
         setStage('uploading_source');
-        setStatusMessage(`Đang lưu tệp ${fileLabel} vào Supabase Storage...`);
-        const sourceUrl = await uploadSourceFile(file, activeSubject.id);
+        setStatusMessage(
+          activeSupabase
+            ? `Đang lưu tệp ${fileLabel} vào Supabase Storage...`
+            : `Đang chuẩn bị tệp ${fileLabel} (lưu cục bộ)...`
+        );
+        const sourceUrl = await uploadSourceFile(file, activeSubject.id, activeSupabase);
 
         // Record source in database or local storage
-        if (isSupabaseConfigured) {
-          await supabase.from('sources').insert({
+        if (activeSupabase) {
+          const { error: sourceInsertError } = await supabase.from('sources').insert({
             subject_id: activeSubject.id,
             file_name: file.name,
             file_url: sourceUrl,
           });
+          if (sourceInsertError) {
+            console.warn('Lỗi lưu nguồn vào Supabase, chuyển sang lưu cục bộ:', sourceInsertError);
+            switchToLocalFallback(sourceInsertError.message);
+            saveLocalSource(file.name, sourceUrl, fIdx);
+          }
         } else {
-          const newSource: Source = {
-            id: `src-${Date.now()}-${fIdx}`,
-            subject_id: activeSubject.id,
-            file_name: file.name,
-            file_url: sourceUrl,
-            created_at: new Date().toISOString(),
-          };
-          const stored = localStorage.getItem(`living_wiki_sources_${activeSubject.id}`);
-          const list: Source[] = stored ? JSON.parse(stored) : [];
-          list.unshift(newSource);
-          localStorage.setItem(`living_wiki_sources_${activeSubject.id}`, JSON.stringify(list));
+          saveLocalSource(file.name, sourceUrl, fIdx);
         }
 
         // Stage 2: Render pages via PDF.js or Image loader
@@ -236,7 +277,8 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
                     croppedBlob,
                     activeSubject.id,
                     ill.page_number,
-                    fIdx * 100 + i
+                    fIdx * 100 + i,
+                    activeSupabase
                   );
                   const placeholder = `[HÌNH_MINH_HỌA_${i + 1}]`;
                   const illustrationMarkdown = `\n\n![${ill.caption}](${publicUrl})\n*Hình: ${ill.caption}*\n\n`;
@@ -259,6 +301,12 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
           });
         }
 
+        // Release rendered canvas buffers after cropping
+        for (const page of renderedPages) {
+          page.canvas.width = 0;
+          page.canvas.height = 0;
+        }
+
         // Stage 5: Apply Non-Destructive Incremental Synthesis (Anti-Truncation)
         setStage('synthesizing_db');
         setStatusMessage(`Đang tổng hợp tri thức chuẩn thứ tự từ ${fileLabel}...`);
@@ -268,10 +316,15 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
           : -1;
 
         for (const item of processedActions) {
-          if (item.action === 'CREATE' || !item.target_section_id) {
+          const matchedTarget = item.target_section_id
+            ? dynamicSections.find((s) => s.id === item.target_section_id)
+            : undefined;
+
+          if (item.action === 'CREATE' || !matchedTarget) {
             currentMaxOrder += 1;
-            if (isSupabaseConfigured) {
-              const { data: createdSection } = await supabase
+            let created = false;
+            if (activeSupabase) {
+              const { data: createdSection, error: createErr } = await supabase
                 .from('wiki_sections')
                 .insert({
                   subject_id: activeSubject.id,
@@ -282,10 +335,15 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
                 .select()
                 .single();
 
-              if (createdSection) {
+              if (!createErr && createdSection) {
                 dynamicSections.push(createdSection);
+                created = true;
+              } else {
+                console.warn('Lỗi tạo mục wiki trên Supabase, chuyển sang lưu cục bộ:', createErr);
+                switchToLocalFallback(createErr?.message || 'Không thể lưu vào Supabase');
               }
-            } else {
+            }
+            if (!created) {
               const newSec: WikiSection = {
                 id: `sec-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
                 subject_id: activeSubject.id,
@@ -296,33 +354,47 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
               };
               dynamicSections.push(newSec);
             }
-          } else if (item.action === 'APPEND' && item.target_section_id) {
-            if (isSupabaseConfigured) {
-              const { data: targetSection } = await supabase
+          } else {
+            const targetId = matchedTarget.id;
+            let updatedInSupabase = false;
+            if (activeSupabase) {
+              const { data: targetSection, error: fetchTargetErr } = await supabase
                 .from('wiki_sections')
                 .select('content_markdown')
-                .eq('id', item.target_section_id)
+                .eq('id', targetId)
                 .single();
 
-              const existingContent = targetSection?.content_markdown || '';
-              const concatenatedContent = `${existingContent}\n\n${item.content_markdown}`.trim();
+              if (!fetchTargetErr && targetSection) {
+                const existingContent = targetSection.content_markdown || '';
+                const concatenatedContent = `${existingContent}\n\n${item.content_markdown}`.trim();
 
-              await supabase
-                .from('wiki_sections')
-                .update({
-                  content_markdown: concatenatedContent,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', item.target_section_id);
+                const { error: updateErr } = await supabase
+                  .from('wiki_sections')
+                  .update({
+                    content_markdown: concatenatedContent,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('id', targetId);
 
-              dynamicSections = dynamicSections.map((sec) =>
-                sec.id === item.target_section_id
-                  ? { ...sec, content_markdown: concatenatedContent, updated_at: new Date().toISOString() }
-                  : sec
-              );
-            } else {
+                if (!updateErr) {
+                  dynamicSections = dynamicSections.map((sec) =>
+                    sec.id === targetId
+                      ? { ...sec, content_markdown: concatenatedContent, updated_at: new Date().toISOString() }
+                      : sec
+                  );
+                  updatedInSupabase = true;
+                } else {
+                  console.warn('Lỗi cập nhật mục wiki trên Supabase, chuyển sang lưu cục bộ:', updateErr);
+                  switchToLocalFallback(updateErr.message);
+                }
+              } else {
+                console.warn('Lỗi đọc mục đích trên Supabase, chuyển sang lưu cục bộ:', fetchTargetErr);
+                switchToLocalFallback(fetchTargetErr?.message || 'Không thể đọc dữ liệu Supabase');
+              }
+            }
+            if (!updatedInSupabase) {
               dynamicSections = dynamicSections.map((sec) => {
-                if (sec.id === item.target_section_id) {
+                if (sec.id === targetId) {
                   return {
                     ...sec,
                     content_markdown: `${sec.content_markdown}\n\n${item.content_markdown}`.trim(),
@@ -335,7 +407,7 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
           }
         }
 
-        if (!isSupabaseConfigured) {
+        if (!activeSupabase) {
           localStorage.setItem(`living_wiki_sections_${activeSubject.id}`, JSON.stringify(dynamicSections));
         }
       }
@@ -378,8 +450,9 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
             </p>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             disabled={isProcessing}
+            aria-label="Đóng"
             className="p-1 text-slate-400 hover:text-slate-600 rounded-md disabled:opacity-40"
           >
             <X className="w-5 h-5" />
@@ -579,7 +652,7 @@ export const DocumentIngestionModal: React.FC<DocumentIngestionModalProps> = ({
           </div>
           <div className="flex items-center gap-2.5">
             <button
-              onClick={onClose}
+              onClick={handleClose}
               disabled={isProcessing}
               className="px-3.5 py-1.5 text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-40"
             >

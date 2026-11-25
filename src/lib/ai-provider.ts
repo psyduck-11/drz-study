@@ -27,13 +27,16 @@ function getAnthropicProvider() {
   });
 }
 
+const DEFAULT_SYNTHESIS_MODEL = 'gemini-2.5-pro';
+const DEFAULT_VISION_MODEL = 'gemini-2.5-flash';
+
 /**
  * Returns the configured LanguageModel for in-depth knowledge synthesis.
  * Controlled by AI_SYNTHESIS_PROVIDER and AI_SYNTHESIS_MODEL.
  */
 export function getSynthesisModel(): LanguageModelV1 {
   const providerName = (process.env.AI_SYNTHESIS_PROVIDER || 'google').toLowerCase() as AIProviderName;
-  const modelName = process.env.AI_SYNTHESIS_MODEL || 'gemini-1.5-pro';
+  const modelName = process.env.AI_SYNTHESIS_MODEL || DEFAULT_SYNTHESIS_MODEL;
 
   switch (providerName) {
     case 'openai': {
@@ -59,7 +62,7 @@ export function getSynthesisModel(): LanguageModelV1 {
  */
 export function getVisionModel(): LanguageModelV1 {
   const providerName = (process.env.AI_VISION_PROVIDER || 'google').toLowerCase() as AIProviderName;
-  const modelName = process.env.AI_VISION_MODEL || 'gemini-1.5-flash';
+  const modelName = process.env.AI_VISION_MODEL || DEFAULT_VISION_MODEL;
 
   switch (providerName) {
     case 'openai': {
@@ -83,9 +86,9 @@ export function getVisionModel(): LanguageModelV1 {
  */
 export function checkAIConfig() {
   const synthesisProvider = (process.env.AI_SYNTHESIS_PROVIDER || 'google').toLowerCase() as AIProviderName;
-  const synthesisModel = process.env.AI_SYNTHESIS_MODEL || 'gemini-2.5-pro';
+  const synthesisModel = process.env.AI_SYNTHESIS_MODEL || DEFAULT_SYNTHESIS_MODEL;
   const visionProvider = (process.env.AI_VISION_PROVIDER || 'google').toLowerCase() as AIProviderName;
-  const visionModel = process.env.AI_VISION_MODEL || 'gemini-2.5-flash';
+  const visionModel = process.env.AI_VISION_MODEL || DEFAULT_VISION_MODEL;
 
   const hasGoogleKey = Boolean(process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY);
   const hasOpenAIKey = Boolean(process.env.OPENAI_API_KEY);
@@ -96,11 +99,15 @@ export function checkAIConfig() {
   if (synthesisProvider === 'openai' && hasOpenAIKey) isConfigured = true;
   if (synthesisProvider === 'anthropic' && hasAnthropicKey) isConfigured = true;
 
+  const isHybrid =
+    synthesisProvider !== visionProvider || synthesisModel !== visionModel;
+
   return {
     synthesisProvider,
     synthesisModel,
     visionProvider,
     visionModel,
+    isHybrid,
     isConfigured,
     hasGoogleKey,
     hasOpenAIKey,

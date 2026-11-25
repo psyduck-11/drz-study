@@ -27,7 +27,8 @@ export const Header: React.FC<HeaderProps> = ({
     compiledMd += `*Hệ tri thức Living Wiki - Xuất ngày ${new Date().toLocaleDateString('vi-VN')}*\n\n---\n\n`;
 
     sections.forEach((sec, idx) => {
-      compiledMd += `## ${idx + 1}. ${sec.title}\n\n`;
+      const hasLeadingIndex = /^\d+[.)]\s/.test(sec.title.trim());
+      compiledMd += `## ${hasLeadingIndex ? sec.title : `${idx + 1}. ${sec.title}`}\n\n`;
       compiledMd += `${sec.content_markdown}\n\n---\n\n`;
     });
 

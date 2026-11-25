@@ -55,7 +55,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) =
           table({ node, ...props }) {
             return (
               <div className="overflow-x-auto my-6 border border-slate-200 dark:border-slate-800 rounded-lg">
-                <table className="w-full text-left text-sm" {...props} />
+                <table className="w-full text-left text-sm !my-0 border-collapse" {...props} />
               </div>
             );
           },

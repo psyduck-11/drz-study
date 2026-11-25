@@ -308,17 +308,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
               Chưa có nội dung. Hãy nạp tài liệu để tổng hợp.
             </p>
           ) : (
-            sections.map((sec, idx) => (
-              <a
-                key={sec.id}
-                href={`#section-${sec.id}`}
-                className="block text-xs text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 px-2 py-1 rounded truncate transition-colors"
-                title={sec.title}
-              >
-                <span className="text-slate-400 mr-1.5">{idx + 1}.</span>
-                {sec.title}
-              </a>
-            ))
+            sections.map((sec, idx) => {
+              const hasLeadingIndex = /^\d+[.)]\s/.test(sec.title.trim());
+              return (
+                <a
+                  key={sec.id}
+                  href={`#section-${sec.id}`}
+                  className="block text-xs text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 px-2 py-1 rounded truncate transition-colors"
+                  title={sec.title}
+                >
+                  {!hasLeadingIndex && (
+                    <span className="text-slate-400 mr-1.5">{idx + 1}.</span>
+                  )}
+                  {sec.title}
+                </a>
+              );
+            })
           )}
         </div>
       </div>

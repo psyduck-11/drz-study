@@ -95,11 +95,11 @@ NGUYÊN TẮC BẮT BUỘC (QUY TẮC ANTI-TRUNCATION - KHÔNG PHÁ HỦY KIẾN
       | { type: 'text'; text: string }
       | { type: 'image'; image: string }
     > = [
-      {
-        type: 'text',
-        text: `Tên tệp: ${fileName}\nSố trang: ${pages.length}\nHãy phân tích toàn bộ tài liệu sau và xuất ra danh sách các hành động CREATE hoặc APPEND tương ứng.`,
-      },
-    ];
+        {
+          type: 'text',
+          text: `Tên tệp: ${fileName}\nSố trang: ${pages.length}\nHãy phân tích toàn bộ tài liệu sau và xuất ra danh sách các hành động CREATE hoặc APPEND tương ứng.`,
+        },
+      ];
 
     for (const page of pages) {
       userContent.push({
@@ -114,7 +114,7 @@ NGUYÊN TẮC BẮT BUỘC (QUY TẮC ANTI-TRUNCATION - KHÔNG PHÁ HỦY KIẾN
 
     const visionModel = getVisionModel();
     const synthesisModel = getSynthesisModel();
-    const isHybrid = process.env.AI_VISION_MODEL !== process.env.AI_SYNTHESIS_MODEL;
+    const isHybrid = aiStatus.isHybrid;
 
     let result;
 

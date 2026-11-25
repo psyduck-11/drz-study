@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Subject, WikiSection, Source } from '@/types/database';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { Sidebar } from '@/components/Sidebar';
@@ -84,6 +84,68 @@ export default function HomePage() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isIngestModalOpen, setIsIngestModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSupabaseOffline, setIsSupabaseOffline] = useState(false);
+  const [supabaseErrorMsg, setSupabaseErrorMsg] = useState<string | null>(null);
+  const supabaseOfflineRef = useRef(false);
+
+  const canUseSupabase = isSupabaseConfigured && !isSupabaseOffline;
+
+  const markSupabaseOffline = useCallback((reason: string) => {
+    if (!supabaseOfflineRef.current) {
+      supabaseOfflineRef.current = true;
+      setIsSupabaseOffline(true);
+      setSupabaseErrorMsg(reason);
+    }
+  }, []);
+
+  const loadLocalSubjects = useCallback((): Subject[] => {
+    if (typeof window === 'undefined') return [INITIAL_DEMO_SUBJECT];
+    const stored = localStorage.getItem('living_wiki_subjects');
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {
+        // Ignore corrupt localStorage and re-seed demo subject
+      }
+    }
+    localStorage.setItem('living_wiki_subjects', JSON.stringify([INITIAL_DEMO_SUBJECT]));
+    return [INITIAL_DEMO_SUBJECT];
+  }, []);
+
+  const loadLocalSections = useCallback((subjectId: string): WikiSection[] => {
+    if (typeof window === 'undefined') {
+      return subjectId === INITIAL_DEMO_SUBJECT.id ? INITIAL_DEMO_SECTIONS : [];
+    }
+    const stored = localStorage.getItem(`living_wiki_sections_${subjectId}`);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        // Ignore corrupt localStorage
+      }
+    }
+    if (subjectId === INITIAL_DEMO_SUBJECT.id) {
+      localStorage.setItem(`living_wiki_sections_${subjectId}`, JSON.stringify(INITIAL_DEMO_SECTIONS));
+      return INITIAL_DEMO_SECTIONS;
+    }
+    return [];
+  }, []);
+
+  const loadLocalSources = useCallback((subjectId: string): Source[] => {
+    if (typeof window === 'undefined') return [];
+    const stored = localStorage.getItem(`living_wiki_sources_${subjectId}`);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        // Ignore corrupt localStorage
+      }
+    }
+    return [];
+  }, []);
 
   // Initialize theme from system or preference
   useEffect(() => {
@@ -108,63 +170,10 @@ export default function HomePage() {
     });
   };
 
-  // Fetch subjects from Supabase or fallback — runs ONCE on mount
-  const fetchSubjects = useCallback(async () => {
-    try {
-      if (isSupabaseConfigured) {
-        const { data, error } = await supabase
-          .from('subjects')
-          .select('*')
-          .order('created_at', { ascending: true });
-
-        if (error) throw error;
-
-        if (data && data.length > 0) {
-          setSubjects(data);
-          setActiveSubject(data[0]);
-        } else {
-          // If Supabase table is empty, create a starter subject
-          const { data: newSub } = await supabase
-            .from('subjects')
-            .insert({ name: 'Đại Số Tuyến Tính & Học Máy' })
-            .select()
-            .single();
-
-          if (newSub) {
-            setSubjects([newSub]);
-            setActiveSubject(newSub);
-          }
-        }
-      } else {
-        // Fallback local persistence for offline experience
-        const stored = typeof window !== 'undefined' ? localStorage.getItem('living_wiki_subjects') : null;
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (parsed.length > 0) {
-            setSubjects(parsed);
-            setActiveSubject(parsed[0]);
-            return;
-          }
-        }
-        // First time: seed demo data and persist it
-        setSubjects([INITIAL_DEMO_SUBJECT]);
-        setActiveSubject(INITIAL_DEMO_SUBJECT);
-        localStorage.setItem('living_wiki_subjects', JSON.stringify([INITIAL_DEMO_SUBJECT]));
-      }
-    } catch (err) {
-      console.warn('Lỗi khi tải môn học từ Supabase:', err);
-      setSubjects([INITIAL_DEMO_SUBJECT]);
-      setActiveSubject(INITIAL_DEMO_SUBJECT);
-    } finally {
-      setIsLoading(false);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Fetch sections for current active subject
   const fetchSections = useCallback(async (subjectId: string) => {
     try {
-      if (isSupabaseConfigured) {
+      if (isSupabaseConfigured && !supabaseOfflineRef.current) {
         const { data, error } = await supabase
           .from('wiki_sections')
           .select('*')
@@ -173,26 +182,19 @@ export default function HomePage() {
 
         if (error) throw error;
         setSections(data || []);
-      } else {
-        const stored = typeof window !== 'undefined' ? localStorage.getItem(`living_wiki_sections_${subjectId}`) : null;
-        if (stored) {
-          setSections(JSON.parse(stored));
-        } else if (subjectId === INITIAL_DEMO_SUBJECT.id) {
-          setSections(INITIAL_DEMO_SECTIONS);
-        } else {
-          setSections([]);
-        }
+        return;
       }
-    } catch (err) {
-      console.warn('Lỗi khi tải mục wiki:', err);
-      setSections(INITIAL_DEMO_SECTIONS);
+    } catch (err: any) {
+      console.warn('Lỗi khi tải mục wiki từ Supabase, chuyển sang lưu cục bộ:', err);
+      markSupabaseOffline(err?.message || 'Không thể kết nối Supabase');
     }
-  }, []);
+    setSections(loadLocalSections(subjectId));
+  }, [loadLocalSections, markSupabaseOffline]);
 
   // Fetch source documents for current active subject
   const fetchSources = useCallback(async (subjectId: string) => {
     try {
-      if (isSupabaseConfigured) {
+      if (isSupabaseConfigured && !supabaseOfflineRef.current) {
         const { data, error } = await supabase
           .from('sources')
           .select('*')
@@ -201,72 +203,128 @@ export default function HomePage() {
 
         if (error) throw error;
         setSources(data || []);
-      } else {
-        const stored = typeof window !== 'undefined' ? localStorage.getItem(`living_wiki_sources_${subjectId}`) : null;
-        if (stored) {
-          setSources(JSON.parse(stored));
-        } else {
-          setSources([]);
-        }
+        return;
       }
-    } catch (err) {
-      console.warn('Lỗi khi tải tài liệu nguồn:', err);
-      setSources([]);
+    } catch (err: any) {
+      console.warn('Lỗi khi tải tài liệu nguồn từ Supabase, chuyển sang lưu cục bộ:', err);
+      markSupabaseOffline(err?.message || 'Không thể kết nối Supabase');
     }
-  }, []);
+    setSources(loadLocalSources(subjectId));
+  }, [loadLocalSources, markSupabaseOffline]);
+
+  // Fetch subjects from Supabase or fallback — runs ONCE on mount
+  const fetchSubjects = useCallback(async () => {
+    try {
+      let resolvedSubjects: Subject[] = [];
+      if (isSupabaseConfigured && !supabaseOfflineRef.current) {
+        const { data, error } = await supabase
+          .from('subjects')
+          .select('*')
+          .order('created_at', { ascending: true });
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          resolvedSubjects = data;
+        } else {
+          // If Supabase table is empty, create a starter subject
+          const { data: newSub, error: createError } = await supabase
+            .from('subjects')
+            .insert({ name: 'Đại Số Tuyến Tính & Học Máy' })
+            .select()
+            .single();
+
+          if (createError) throw createError;
+          if (newSub) {
+            resolvedSubjects = [newSub];
+          }
+        }
+      } else {
+        resolvedSubjects = loadLocalSubjects();
+      }
+
+      const initialSubject = resolvedSubjects[0] || null;
+      setSubjects(resolvedSubjects);
+      setActiveSubject(initialSubject);
+      if (initialSubject) {
+        await Promise.all([
+          fetchSections(initialSubject.id),
+          fetchSources(initialSubject.id),
+        ]);
+      }
+    } catch (err: any) {
+      console.warn('Lỗi khi tải môn học từ Supabase, chuyển sang lưu cục bộ:', err);
+      markSupabaseOffline(err?.message || 'Không thể kết nối Supabase');
+      const localSubjects = loadLocalSubjects();
+      const initialSubject = localSubjects[0] || null;
+      setSubjects(localSubjects);
+      setActiveSubject(initialSubject);
+      if (initialSubject) {
+        setSections(loadLocalSections(initialSubject.id));
+        setSources(loadLocalSources(initialSubject.id));
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [fetchSections, fetchSources, loadLocalSections, loadLocalSources, loadLocalSubjects, markSupabaseOffline]);
 
   useEffect(() => {
     fetchSubjects();
   }, [fetchSubjects]);
 
+  const activeSubjectId = activeSubject?.id;
   useEffect(() => {
-    if (activeSubject) {
-      fetchSections(activeSubject.id);
-      fetchSources(activeSubject.id);
+    if (isLoading) return;
+    if (activeSubjectId) {
+      fetchSections(activeSubjectId);
+      fetchSources(activeSubjectId);
     } else {
       setSections([]);
       setSources([]);
     }
-  }, [activeSubject, fetchSections, fetchSources]);
+  }, [activeSubjectId, isLoading, fetchSections, fetchSources]);
 
   // Subject Handlers
   const handleCreateSubject = async (name: string) => {
-    if (isSupabaseConfigured) {
+    if (isSupabaseConfigured && !supabaseOfflineRef.current) {
       const { data, error } = await supabase
         .from('subjects')
         .insert({ name })
         .select()
         .single();
-      if (error) {
-        alert('Lỗi tạo môn học: ' + error.message);
-        return;
-      }
-      if (data) {
+      if (!error && data) {
         setSubjects((prev) => [...prev, data]);
         setActiveSubject(data);
+        return;
       }
-    } else {
-      const newSub: Subject = {
-        id: `sub-${Date.now()}`,
-        name,
-        created_at: new Date().toISOString(),
-      };
-      setSubjects((prev) => {
-        const updated = [...prev, newSub];
-        localStorage.setItem('living_wiki_subjects', JSON.stringify(updated));
-        return updated;
-      });
-      setActiveSubject(newSub);
+      console.warn('Lỗi tạo môn học trên Supabase, chuyển sang lưu cục bộ:', error);
+      markSupabaseOffline(error?.message || 'Không thể kết nối Supabase');
     }
+
+    const newSub: Subject = {
+      id: `sub-${Date.now()}`,
+      name,
+      created_at: new Date().toISOString(),
+    };
+    setSubjects((prev) => {
+      const updated = [...prev, newSub];
+      localStorage.setItem('living_wiki_subjects', JSON.stringify(updated));
+      return updated;
+    });
+    setActiveSubject(newSub);
   };
 
   const handleRenameSubject = async (id: string, newName: string) => {
-    if (isSupabaseConfigured) {
-      await supabase.from('subjects').update({ name: newName }).eq('id', id);
+    if (isSupabaseConfigured && !supabaseOfflineRef.current) {
+      const { error } = await supabase.from('subjects').update({ name: newName }).eq('id', id);
+      if (error) {
+        console.warn('Lỗi đổi tên môn học trên Supabase, chuyển sang lưu cục bộ:', error);
+        markSupabaseOffline(error.message);
+      }
     }
     setSubjects((prev) => {
       const updated = prev.map((s) => (s.id === id ? { ...s, name: newName } : s));
-      if (!isSupabaseConfigured) {
+      if (!isSupabaseConfigured || supabaseOfflineRef.current) {
         localStorage.setItem('living_wiki_subjects', JSON.stringify(updated));
       }
       return updated;
@@ -277,32 +335,37 @@ export default function HomePage() {
   };
 
   const handleDeleteSubject = async (id: string) => {
-    if (isSupabaseConfigured) {
-      await supabase.from('subjects').delete().eq('id', id);
-    }
-    setSubjects((prev) => {
-      const updated = prev.filter((s) => s.id !== id);
-      if (!isSupabaseConfigured) {
-        localStorage.setItem('living_wiki_subjects', JSON.stringify(updated));
-        localStorage.removeItem(`living_wiki_sections_${id}`);
-        localStorage.removeItem(`living_wiki_sources_${id}`);
+    if (isSupabaseConfigured && !supabaseOfflineRef.current) {
+      const { error } = await supabase.from('subjects').delete().eq('id', id);
+      if (error) {
+        console.warn('Lỗi xóa môn học trên Supabase, chuyển sang lưu cục bộ:', error);
+        markSupabaseOffline(error.message);
       }
-      return updated;
-    });
+    }
+    const remaining = subjects.filter((s) => s.id !== id);
+    setSubjects(remaining);
+    if (!isSupabaseConfigured || supabaseOfflineRef.current) {
+      localStorage.setItem('living_wiki_subjects', JSON.stringify(remaining));
+      localStorage.removeItem(`living_wiki_sections_${id}`);
+      localStorage.removeItem(`living_wiki_sources_${id}`);
+    }
     if (activeSubject?.id === id) {
-      const remaining = subjects.filter((s) => s.id !== id);
       setActiveSubject(remaining.length > 0 ? remaining[0] : null);
     }
   };
 
   const handleDeleteSource = async (id: string) => {
     if (!activeSubject) return;
-    if (isSupabaseConfigured) {
-      await supabase.from('sources').delete().eq('id', id);
+    if (isSupabaseConfigured && !supabaseOfflineRef.current) {
+      const { error } = await supabase.from('sources').delete().eq('id', id);
+      if (error) {
+        console.warn('Lỗi xóa nguồn trên Supabase, chuyển sang lưu cục bộ:', error);
+        markSupabaseOffline(error.message);
+      }
     }
     setSources((prev) => {
       const updated = prev.filter((s) => s.id !== id);
-      if (!isSupabaseConfigured) {
+      if (!isSupabaseConfigured || supabaseOfflineRef.current) {
         localStorage.setItem(`living_wiki_sources_${activeSubject.id}`, JSON.stringify(updated));
       }
       return updated;
@@ -312,23 +375,28 @@ export default function HomePage() {
   // Section Handlers
   const handleUpdateSection = async (id: string, newTitle: string, newContent: string) => {
     if (!activeSubject) return;
-    if (isSupabaseConfigured) {
-      await supabase
+    const now = new Date().toISOString();
+    if (isSupabaseConfigured && !supabaseOfflineRef.current) {
+      const { error } = await supabase
         .from('wiki_sections')
         .update({
           title: newTitle,
           content_markdown: newContent,
-          updated_at: new Date().toISOString(),
+          updated_at: now,
         })
         .eq('id', id);
+      if (error) {
+        console.warn('Lỗi cập nhật mục trên Supabase, chuyển sang lưu cục bộ:', error);
+        markSupabaseOffline(error.message);
+      }
     }
     setSections((prev) => {
       const updated = prev.map((sec) =>
         sec.id === id
-          ? { ...sec, title: newTitle, content_markdown: newContent, updated_at: new Date().toISOString() }
+          ? { ...sec, title: newTitle, content_markdown: newContent, updated_at: now }
           : sec
       );
-      if (!isSupabaseConfigured) {
+      if (!isSupabaseConfigured || supabaseOfflineRef.current) {
         localStorage.setItem(`living_wiki_sections_${activeSubject.id}`, JSON.stringify(updated));
       }
       return updated;
@@ -337,12 +405,16 @@ export default function HomePage() {
 
   const handleDeleteSection = async (id: string) => {
     if (!activeSubject) return;
-    if (isSupabaseConfigured) {
-      await supabase.from('wiki_sections').delete().eq('id', id);
+    if (isSupabaseConfigured && !supabaseOfflineRef.current) {
+      const { error } = await supabase.from('wiki_sections').delete().eq('id', id);
+      if (error) {
+        console.warn('Lỗi xóa mục trên Supabase, chuyển sang lưu cục bộ:', error);
+        markSupabaseOffline(error.message);
+      }
     }
     setSections((prev) => {
       const updated = prev.filter((sec) => sec.id !== id);
-      if (!isSupabaseConfigured) {
+      if (!isSupabaseConfigured || supabaseOfflineRef.current) {
         localStorage.setItem(`living_wiki_sections_${activeSubject.id}`, JSON.stringify(updated));
       }
       return updated;
@@ -368,14 +440,20 @@ export default function HomePage() {
     }));
     setSections(updated);
 
-    if (isSupabaseConfigured) {
+    if (isSupabaseConfigured && !supabaseOfflineRef.current) {
       for (const item of updated) {
-        await supabase
+        const { error } = await supabase
           .from('wiki_sections')
           .update({ order_index: item.order_index })
           .eq('id', item.id);
+        if (error) {
+          console.warn('Lỗi sắp xếp mục trên Supabase, chuyển sang lưu cục bộ:', error);
+          markSupabaseOffline(error.message);
+          break;
+        }
       }
-    } else {
+    }
+    if (!isSupabaseConfigured || supabaseOfflineRef.current) {
       localStorage.setItem(`living_wiki_sections_${activeSubject.id}`, JSON.stringify(updated));
     }
   };
@@ -389,8 +467,8 @@ export default function HomePage() {
     const newTitle = `Mục mới ${sections.length + 1}`;
     const newContent = 'Nhập nội dung Markdown tại đây...';
 
-    if (isSupabaseConfigured) {
-      const { data } = await supabase
+    if (isSupabaseConfigured && !supabaseOfflineRef.current) {
+      const { data, error } = await supabase
         .from('wiki_sections')
         .insert({
           subject_id: activeSubject.id,
@@ -401,24 +479,27 @@ export default function HomePage() {
         .select()
         .single();
 
-      if (data) {
+      if (!error && data) {
         setSections((prev) => [...prev, data]);
+        return;
       }
-    } else {
-      const newSec: WikiSection = {
-        id: `sec-${Date.now()}`,
-        subject_id: activeSubject.id,
-        title: newTitle,
-        order_index: nextOrder,
-        content_markdown: newContent,
-        updated_at: new Date().toISOString(),
-      };
-      setSections((prev) => {
-        const updated = [...prev, newSec];
-        localStorage.setItem(`living_wiki_sections_${activeSubject.id}`, JSON.stringify(updated));
-        return updated;
-      });
+      console.warn('Lỗi thêm mục thủ công trên Supabase, chuyển sang lưu cục bộ:', error);
+      markSupabaseOffline(error?.message || 'Không thể kết nối Supabase');
     }
+
+    const newSec: WikiSection = {
+      id: `sec-${Date.now()}`,
+      subject_id: activeSubject.id,
+      title: newTitle,
+      order_index: nextOrder,
+      content_markdown: newContent,
+      updated_at: new Date().toISOString(),
+    };
+    setSections((prev) => {
+      const updated = [...prev, newSec];
+      localStorage.setItem(`living_wiki_sections_${activeSubject.id}`, JSON.stringify(updated));
+      return updated;
+    });
   };
 
   return (
@@ -449,14 +530,20 @@ export default function HomePage() {
           onOpenIngestModal={() => setIsIngestModalOpen(true)}
         />
 
-        {/* Informational banner if Supabase isn't configured yet */}
-        {!isSupabaseConfigured && (
+        {/* Informational banner if Supabase isn't configured or is unreachable */}
+        {!canUseSupabase && (
           <div className="bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-900/40 px-4 py-2 text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between">
             <div className="flex items-center gap-2 max-w-[820px] mx-auto w-full">
               <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
-              <span>
-                <strong>Chế độ Xem trước cục bộ:</strong> Chưa cấu hình thông tin Supabase trong <code className="bg-amber-100 dark:bg-amber-900/60 px-1 py-0.5 rounded">.env.local</code>. Dữ liệu đang hiển thị mẫu để bạn trải nghiệm UI.
-              </span>
+              {!isSupabaseConfigured ? (
+                <span>
+                  <strong>Chế độ Xem trước cục bộ:</strong> Chưa cấu hình thông tin Supabase trong <code className="bg-amber-100 dark:bg-amber-900/60 px-1 py-0.5 rounded">.env.local</code>. Dữ liệu đang được lưu trong trình duyệt.
+                </span>
+              ) : (
+                <span>
+                  <strong>Mất kết nối Supabase:</strong> Không thể truy cập máy chủ Supabase ({supabaseErrorMsg || 'lỗi mạng/DNS'}). Ứng dụng đã chuyển sang lưu cục bộ (<code className="bg-amber-100 dark:bg-amber-900/60 px-1 py-0.5 rounded">localStorage</code>) — kiểm tra <code className="bg-amber-100 dark:bg-amber-900/60 px-1 py-0.5 rounded">NEXT_PUBLIC_SUPABASE_URL</code> trong <code className="bg-amber-100 dark:bg-amber-900/60 px-1 py-0.5 rounded">.env.local</code>.
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -539,6 +626,8 @@ export default function HomePage() {
         isOpen={isIngestModalOpen}
         activeSubject={activeSubject}
         existingSections={sections}
+        useSupabase={canUseSupabase}
+        onSupabaseOffline={markSupabaseOffline}
         onClose={() => setIsIngestModalOpen(false)}
         onSuccess={async () => {
           if (activeSubject) {
